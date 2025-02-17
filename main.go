@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/arran4/golang-ical"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -12,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/arran4/golang-ical"
+	"github.com/gin-gonic/gin"
 )
 
 // Event represents a calendar event to be returned in the JSON response.
@@ -26,60 +28,56 @@ type Event struct {
 }
 
 // caljsonHandler handles the /caljson endpoint.
-func caljsonHandler(w http.ResponseWriter, r *http.Request) {
+func caljsonHandler(c *gin.Context) {
 	// Parse query parameters
-	params := r.URL.Query()
-	icsURL := params.Get("ics")
-	dayStr := params.Get("day")
+	icsURL := c.Query("ics")
+	dayStr := c.DefaultQuery("day", "0")
 
 	// Validate query parameters
 	if icsURL == "" {
-		http.Error(w, "Missing 'ics' parameter", http.StatusBadRequest)
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "Missing 'ics' parameter"})
 		return
 	}
 
-	if dayStr == "" {
-		dayStr = "0"
-	}
 	dayOffset, err := strconv.Atoi(dayStr)
 	if err != nil {
-		http.Error(w, "Invalid 'day' parameter", http.StatusBadRequest)
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "Invalid 'day' parameter"})
 		return
 	}
 
 	// Decode the ICS URL
 	decodedIcsURL, err := url.QueryUnescape(icsURL)
 	if err != nil {
-		http.Error(w, "Invalid 'ics' URL", http.StatusBadRequest)
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "Invalid 'ics' URL"})
 		return
 	}
 
-	// log that we recieved a request, ip address, and the ics url
-	fmt.Println("Request from: ", r.RemoteAddr, " for ", decodedIcsURL)
+	// Log the request details
+	fmt.Println("Request from:", c.ClientIP(), "for", decodedIcsURL)
 
 	// Fetch the ICS data
 	resp, err := http.Get(decodedIcsURL)
 	if err != nil {
-		http.Error(w, "Failed to fetch ICS URL", http.StatusInternalServerError)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch ICS URL"})
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "Failed to retrieve ICS file", http.StatusInternalServerError)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve ICS file"})
 		return
 	}
 
 	icsData, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		http.Error(w, "Failed to read ICS data", http.StatusInternalServerError)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Failed to read ICS data"})
 		return
 	}
 
 	// Parse the ICS data
 	calendar, err := ics.ParseCalendar(strings.NewReader(string(icsData)))
 	if err != nil {
-		http.Error(w, "Failed to parse ICS data", http.StatusInternalServerError)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse ICS data"})
 		return
 	}
 
@@ -109,12 +107,7 @@ func caljsonHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Return events as JSON
-	w.Header().Set("Content-Type", "application/json")
-	err = json.NewEncoder(w).Encode(events)
-	if err != nil {
-		http.Error(w, "Failed to encode events to JSON", http.StatusInternalServerError)
-		return
-	}
+	c.JSON(http.StatusOK, events)
 }
 
 // parseEvent extracts event details and checks if it occurs on the target date.
@@ -213,10 +206,9 @@ func parseEvent(vevent *ics.VEvent, targetStart, targetEnd time.Time) (*Event, e
 
 // parseICalTime parses an iCalendar date-time string into a time.Time, considering time zones.
 func parseICalTime(value string, prop *ics.IANAProperty) (time.Time, error) {
-	format := "20060102T150405Z0700"
 	if strings.HasSuffix(value, "Z") {
-		format = "20060102T150405Z"
-		return time.Parse(format, value)
+		// UTC time
+		return time.Parse("20060102T150405Z", value)
 	}
 
 	// Check for TZID
@@ -235,7 +227,13 @@ func parseICalTime(value string, prop *ics.IANAProperty) (time.Time, error) {
 }
 
 func main() {
-	http.HandleFunc("/caljson", caljsonHandler)
-	fmt.Println("Server is listening on port 8080...")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	r := gin.Default()
+
+	// Define the /caljson route
+	r.GET("/caljson", caljsonHandler)
+
+	fmt.Println("Server is listening on port 8030...")
+	if err := r.Run(":8030"); err != nil {
+		log.Fatal(err)
+	}
 }
